@@ -1,0 +1,104 @@
+name: mention-monitor
+
+on:
+  schedule:
+    # Every 6 hours. GitHub's scheduler is best-effort and can lag under load.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Lookback window in hours"
+        required: false
+        default: "12"
+      seed:
+        description: "Seed state without reporting (true/false)"
+        required: false
+        default: "false"
+
+# Needed so the job can commit the updated seen.json back to the repo.
+permissions:
+  contents: write
+
+# Never let two runs race on seen.json.
+concurrency:
+  group: mention-monitor
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Keep the token so the commit step can push.
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # No pip install step: the script is standard library only.
+
+      # Belt-and-braces: the committed seen.json is the source of truth, but a
+      # cache lets state survive if someone disables the commit step below.
+      - name: Restore seen.json cache
+        uses: actions/cache@v4
+        with:
+          path: seen.json
+          key: mention-monitor-seen-${{ github.run_id }}
+          restore-keys: |
+            mention-monitor-seen-
+
+      - name: Run mention monitor
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python3 mention_monitor.py \
+            --config config.json \
+            --state seen.json \
+            --hours "${{ github.event.inputs.hours || '12' }}" \
+            ${{ github.event.inputs.seed == 'true' && '--seed' || '' }} \
+            | tee digest.txt
+
+      - name: Publish digest to the job summary
+        if: always()
+        run: |
+          {
+            echo '## Mention monitor digest'
+            echo '```'
+            cat digest.txt 2>/dev/null || echo '(no digest produced)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit updated state
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f seen.json ]; then
+            echo "no seen.json produced; nothing to commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add seen.json
+          if git diff --cached --quiet; then
+            echo "seen.json unchanged"
+            exit 0
+          fi
+          git commit -m "chore: update mention-monitor state [skip ci]"
+          # Rebase in case another commit landed while we were polling.
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Upload digest artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mention-digest
+          path: digest.txt
+          if-no-files-found: ignore
+          retention-days: 14

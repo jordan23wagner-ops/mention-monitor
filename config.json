@@ -1,0 +1,71 @@
+{
+  "user_agent": "mention-monitor/1.0.0 (self-hosted keyword monitor; +https://github.com/jordan23wagner-ops/mention-monitor)",
+  "lookback_hours": 24,
+  "request_delay_seconds": 2.0,
+  "reddit_delay_seconds": 6.0,
+  "timeout_seconds": 25,
+  "max_retries": 3,
+  "max_seen_ids": 5000,
+  "strict_match": true,
+  "sources": {
+    "hackernews": true,
+    "reddit": false,
+    "lobsters": true
+  },
+  "exclude": [
+    "onlyfans",
+    "crypto airdrop",
+    "promo code",
+    "/r/teenagers",
+    "hiring thread",
+    "who is hiring",
+    "resume roast"
+  ],
+  "projects": {
+    "rag-post-processor__intent": [
+      "chunking strategy",
+      "chunk size and overlap",
+      "text splitter",
+      "clean scraped html",
+      "rag preprocessing",
+      "preprocess documents for embedding",
+      "chunk overlap",
+      "prepare data for rag",
+      "scraped data into a vector",
+      "cleaning scraped text"
+    ],
+    "rag-post-processor__adjacent": [
+      "website content crawler",
+      "apify actor",
+      "scraper output",
+      "post-processing pipeline"
+    ],
+    "alicia__intent": [
+      "autofill job applications",
+      "workday autofill",
+      "tailor my resume",
+      "job application automation",
+      "applying to hundreds of jobs",
+      "ats keyword",
+      "auto apply linkedin"
+    ],
+    "agent-handoff__intent": [
+      "agent handoff",
+      "agent orchestration",
+      "multi-agent state",
+      "passing context between agents",
+      "stripe metered billing"
+    ],
+    "flagcheck__intent": [
+      "job description red flags",
+      "ats resume",
+      "is this job posting a scam",
+      "ghost job posting"
+    ],
+    "chatwillow__brand": [
+      "chatwillow",
+      "chatgpt alternative",
+      "free ai chat"
+    ]
+  }
+}
