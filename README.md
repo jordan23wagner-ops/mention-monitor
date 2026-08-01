@@ -93,27 +93,37 @@ see the note in that section.** Read this section before trusting a silent run.
 `created_at_i>=` numeric filter. Covers both stories and comments, no key, no
 meaningful rate limit at this volume. This is the most reliable source of the three.
 
-### Reddit — DISABLED as of 2026-08-01, unauthenticated access is gone
+### Reddit — CLOSED as of 2026-08-01. All three access paths are dead. Do not re-attempt without an established account.
 
-**Do not re-enable this by flipping `sources.reddit` back to `true`** without
-also implementing OAuth. Reddit deprecated unauthenticated access to
-`.json`/`.rss` endpoints on **2026-05-28**; anonymous requests now get
-403/429 by design, not as a rate-limiting quirk. This isn't a User-Agent
-problem or a delay-tuning problem — the 2026-07-27 "works via RSS fallback"
-note below described a window that has since closed. Confirmed by re-running
-against live Reddit on 2026-08-01: every single term failed with 403/429 on
-both the JSON and RSS paths, from both a CI-like environment and a
-residential IP, regardless of `reddit_delay_seconds`.
+**`sources.reddit` and `sources.reddit_rss` both stay `false`.** This isn't a
+temporary outage or a tuning problem — every unauthenticated and
+low-trust-account path into Reddit has been checked and closed out:
 
-Reddit coverage requires the OAuth `client_credentials` flow
-(`https://www.reddit.com/api/v1/access_token` for a token, then
-`https://oauth.reddit.com/...` with a bearer token) using an app you create
-yourself at reddit.com/prefs/apps. That's the next phase of this tool; until
-it ships, `sources.reddit` stays `false` and coverage is Hacker News +
-Lobste.rs only.
+1. **`.json` / `.rss` unauthenticated endpoints** — deprecated by Reddit on
+   **2026-05-28**. Anonymous requests now return 403 by design.
+2. **OAuth `client_credentials` app** — cannot be created. Reddit's app
+   creation is gated by an account trust threshold (low karma / default
+   username triggers this), not by email verification — email verification
+   was completed on the account used here and confirmed **not** to be the
+   blocker. Without an app, there is no bearer token, so `oauth.reddit.com`
+   is unreachable from this tool.
+3. **`old.reddit.com/r/<sub>/search.rss`** (unauthenticated RSS, no OAuth
+   needed) — implemented as `fetch_reddit_rss()` in `mention_monitor.py` and
+   left in place; the code is correct. Confirmed by live testing on
+   2026-08-01: after a small burst allowance (a handful of requests), it
+   429s at effectively **100%** — unusable as a scheduled source.
 
-Historical notes from when unauthenticated access still worked, kept for
-context once OAuth lands:
+**Conclusion: Reddit requires an account with real history (karma, account
+age) to unlock any of the above. Re-attempting any of these three paths from
+a fresh or low-trust account is wasted effort** — this has already been
+verified exhaustively. The blocker is account trust, not code, User-Agent,
+delay tuning, or email verification. If an established account becomes
+available later, `fetch_reddit_rss` is ready to flip back on via
+`sources.reddit_rss: true`; OAuth (`fetch_reddit`) still needs an app, which
+requires the same trust threshold to create.
+
+Historical notes from when unauthenticated `.json` access still worked, kept
+for context in case an established account revives this path:
 
 - `sort=new` searches post bodies, not just titles. Hits whose titles look
   unrelated usually do contain your phrase further down. This is correct
@@ -174,9 +184,8 @@ Caveats for CI:
 - GitHub's cron is best-effort and can be delayed under load. The default lookback
   is 12h against a 6h schedule, so a skipped run doesn't lose mentions — dedup makes
   the overlap free.
-- As noted above, Reddit's JSON API is blocked from Actions runners; the RSS
-  fallback carries it. If Reddit ever blocks RSS from CI too, the run will report
-  the failure per-term and keep going rather than dying.
+- As noted above, all Reddit paths are closed (`sources.reddit` and
+  `sources.reddit_rss` both `false`); coverage is Hacker News + Lobste.rs only.
 
 ## Robustness
 

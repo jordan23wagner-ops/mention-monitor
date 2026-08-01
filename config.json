@@ -10,6 +10,7 @@
   "sources": {
     "hackernews": true,
     "reddit": false,
+    "reddit_rss": false,
     "lobsters": true
   },
   "exclude": [

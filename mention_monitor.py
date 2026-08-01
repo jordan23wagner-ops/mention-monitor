@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
     "max_retries": 3,
     "max_seen_ids": 5000,
     "strict_match": True,
-    "sources": {"hackernews": True, "reddit": True, "lobsters": True},
+    "sources": {"hackernews": True, "reddit": True, "reddit_rss": True, "lobsters": True},
     "exclude": [],
     "projects": {},
 }
@@ -385,9 +385,99 @@ def fetch_lobsters(term, cfg, since):
     return items
 
 
+# Reddit via RSS is scoped to a fixed subreddit list for the RAG use case
+# only, and only fed rag-post-processor keyword groups (not all 33 terms) -
+# querying every term against every sub is 165 requests and gets
+# rate-limited. See README for why this is a bridge, not a foundation.
+REDDIT_RSS_SUBREDDITS = ["LocalLLaMA", "Rag", "LangChain", "vectordatabase", "MachineLearning"]
+REDDIT_RSS_PROJECT_PREFIX = "rag-post-processor"
+
+
+def _reddit_rss_items_from_xml(raw, subreddit):
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise HttpError("could not parse RSS (%s)" % exc)
+    items = []
+    for entry in root.findall("a:entry", ns):
+        entry_id = entry.findtext("a:id", None, ns)
+        if not entry_id:
+            continue
+        link_el = entry.find("a:link", ns)
+        link = link_el.attrib.get("href", "") if link_el is not None else ""
+        author_el = entry.find("a:author/a:name", ns)
+        body = strip_html(
+            entry.findtext("a:content", None, ns)
+            or entry.findtext("a:summary", None, ns)
+            or ""
+        )
+        items.append(
+            {
+                "id": "rdt:%s" % entry_id,
+                "source": "Reddit (RSS)",
+                "title": entry.findtext("a:title", "(untitled)", ns),
+                "url": link,
+                "author": (author_el.text if author_el is not None else "?") or "?",
+                "text": body,
+                "created": parse_ts(entry.findtext("a:updated", None, ns)),
+                "context": "r/%s" % subreddit,
+                "extra_url": "",
+            }
+        )
+    return items
+
+
+def fetch_reddit_rss(term, cfg, since):
+    """Reddit via old.reddit.com's still-unauthenticated RSS search.
+
+    Reddit deprecated unauthenticated .json access on 2026-05-28; .rss still
+    serves as of this writing, but Reddit has publicly signalled intent to
+    restrict scraping surfaces generally -- treat this as a bridge, not a
+    foundation (see README). Scoped to REDDIT_RSS_SUBREDDITS and, at the
+    call-site in run(), to rag-post-processor keyword groups only.
+    """
+    items = []
+    errors = []
+    for index, sub in enumerate(REDDIT_RSS_SUBREDDITS):
+        if index > 0:
+            time.sleep(cfg["reddit_delay_seconds"])
+        url = "https://old.reddit.com/r/%s/search.rss?%s" % (
+            sub,
+            urllib.parse.urlencode(
+                {"q": term, "restrict_sr": "1", "sort": "new", "t": "week"}
+            ),
+        )
+        try:
+            raw = http_get(url, cfg, accept="application/atom+xml, application/xml")
+        except HttpError as exc:
+            log("  reddit_rss WARNING: r/%s / \"%s\": %s" % (sub, term, exc))
+            errors.append("r/%s: %s" % (sub, exc))
+            continue
+        if not raw or not raw.strip():
+            log("  reddit_rss WARNING: r/%s / \"%s\": empty response" % (sub, term))
+            errors.append("r/%s: empty response" % sub)
+            continue
+        try:
+            items.extend(_reddit_rss_items_from_xml(raw, sub))
+        except HttpError as exc:
+            log("  reddit_rss WARNING: r/%s / \"%s\": %s" % (sub, term, exc))
+            errors.append("r/%s: %s" % (sub, exc))
+            continue
+
+    if not items and errors:
+        # Every subreddit failed for this term - surface it as a genuine
+        # failure in the digest footer rather than silently reporting zero
+        # items, which would read as "no matches" instead of "Reddit
+        # rejected every request".
+        raise HttpError("; ".join(errors))
+    return items
+
+
 SOURCES = {
     "hackernews": fetch_hackernews,
     "reddit": fetch_reddit,
+    "reddit_rss": fetch_reddit_rss,
     "lobsters": fetch_lobsters,
 }
 
@@ -475,7 +565,7 @@ SAMPLE_CONFIG = {
     "max_retries": 3,
     "max_seen_ids": 5000,
     "strict_match": True,
-    "sources": {"hackernews": True, "reddit": True, "lobsters": True},
+    "sources": {"hackernews": True, "reddit": True, "reddit_rss": True, "lobsters": True},
     "exclude": [
         "onlyfans",
         "crypto airdrop",
@@ -681,10 +771,20 @@ def run(args):
 
     for source_name in enabled:
         fetcher = SOURCES[source_name]
-        for project, term in pairs:
+        source_pairs = pairs
+        if source_name == "reddit_rss":
+            # Only the rag-post-processor keyword groups get queried against
+            # Reddit - all 33 terms x 5 subs would be 165 requests and get
+            # rate-limited (see README).
+            source_pairs = [
+                (project, term)
+                for project, term in pairs
+                if project.startswith(REDDIT_RSS_PROJECT_PREFIX)
+            ]
+        for project, term in source_pairs:
             delay = (
                 cfg["reddit_delay_seconds"]
-                if source_name == "reddit"
+                if source_name in ("reddit", "reddit_rss")
                 else cfg["request_delay_seconds"]
             )
             try:
